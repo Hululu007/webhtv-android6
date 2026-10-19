@@ -9,6 +9,7 @@ import com.fongmi.quickjs.method.Local;
 import com.fongmi.quickjs.utils.Async;
 import com.fongmi.quickjs.utils.JSUtil;
 import com.fongmi.quickjs.utils.Module;
+import com.github.catvod.crawler.DebugTrace;
 import com.github.catvod.utils.Asset;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.UriUtil;
@@ -52,8 +53,16 @@ public class Spider extends com.github.catvod.crawler.Spider {
         return executor.submit(callable);
     }
 
+    /**
+     * Runs one spider method on the JS executor, carrying the caller's trace id and site
+     * key across the thread boundary. Both live in {@link ThreadLocal}s, so without this
+     * the events produced inside the engine lose their {@code [spider=...]} tag and the
+     * per-site filter in the log viewer silently returns nothing.
+     */
     private Object call(String func, Object... args) throws Exception {
-        return submit(() -> Async.run(jsObject, func, args)).get().get();
+        String trace = DebugTrace.current();
+        String site = siteKey;
+        return submit(DebugTrace.wrap(trace, site, () -> Async.run(jsObject, func, args))).get().get();
     }
 
     @Override

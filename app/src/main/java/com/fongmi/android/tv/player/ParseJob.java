@@ -14,6 +14,10 @@ import com.fongmi.android.tv.ui.custom.CustomWebView;
 import com.fongmi.android.tv.utils.Task;
 import com.fongmi.android.tv.utils.UrlUtil;
 import com.fongmi.android.tv.utils.WebViewUtil;
+import com.github.catvod.crawler.DebugEvent;
+import com.github.catvod.crawler.DebugLogStore;
+import com.github.catvod.crawler.DebugTrace;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Util;
@@ -43,6 +47,10 @@ public class ParseJob implements ParseCallback {
     private ExecutorService infinite;
     private ParseCallback callback;
     private Parse parse;
+    private String trace;
+    private String site;
+    private long startAt;
+    private volatile boolean timedOut;
 
     private ParseJob(ParseCallback callback) {
         this.executor = Executors.newSingleThreadExecutor();
@@ -56,6 +64,11 @@ public class ParseJob implements ParseCallback {
     }
 
     public ParseJob start(Result result, boolean useParse) {
+        this.trace = result.getDebugTrace();
+        this.site = result.getKey();
+        this.startAt = System.currentTimeMillis();
+        DebugTrace.set(trace);
+        SpiderDebug.setSpider(site);
         setParse(result, useParse);
         execute(result);
         return this;
@@ -68,6 +81,11 @@ public class ParseJob implements ParseCallback {
         if (parse == null || parse.isEmpty()) parse = Parse.get(0, result.getPlayUrl());
         parse.setHeader(result.getHeader());
         parse.setClick(getClick(result));
+        DebugLogStore.addEvent(DebugEvent.stage("parser")
+                .extra("type", String.valueOf(parse.getType()))
+                .extra("name", parse.getName())
+                .extra("url", cut(parse.getUrl(), 300))
+                .extra("playUrl", cut(result.getPlayUrl(), 200)));
     }
 
     private String getClick(Result result) {
@@ -79,16 +97,25 @@ public class ParseJob implements ParseCallback {
     private void execute(Result result) {
         Future<?> task = executor.submit(getTask(result));
         Task.schedule(() -> {
-            if (task.cancel(true)) onParseError();
+            if (task.cancel(true)) {
+                timedOut = true;
+                onParseError();
+            }
         }, Constant.TIMEOUT_PARSE_DEF, TimeUnit.MILLISECONDS);
     }
 
     private Runnable getTask(Result result) {
         return () -> {
+            DebugTrace.set(trace);
+            SpiderDebug.setSpider(site);
             try {
                 doInBackground(result.getKey(), result.getUrl().v(), result.getFlag());
             } catch (Throwable e) {
+                DebugLogStore.addEvent(DebugEvent.exception(e.getClass().getSimpleName(), e.getMessage(), stack(e)).reason(DebugEvent.REASON_PARSE_ERROR));
                 onParseError();
+            } finally {
+                DebugTrace.clear();
+                SpiderDebug.clearSpider();
             }
         };
     }
@@ -157,12 +184,22 @@ public class ParseJob implements ParseCallback {
     }
 
     private void checkResult(Map<String, String> headers, String url, String from, boolean fatal) {
-        if (url.length() > 40) onParseSuccess(headers, url, from);
+        int length = url == null ? 0 : url.length();
+        DebugLogStore.addEvent(DebugEvent.stage("check")
+                .extra("urlLen", String.valueOf(length))
+                .extra("threshold", "40")
+                .extra("verdict", length > 40 ? "success" : fatal ? "error" : "skip")
+                .extra("url", cut(url, 300)));
+        if (length > 40) onParseSuccess(headers, url, from);
         else if (fatal) onParseError();
     }
 
     private void checkResult(Result result) {
         result.setHeader(parse.getHeader());
+        DebugLogStore.addEvent(DebugEvent.stage("check")
+                .extra("urlLen", String.valueOf(result.getUrl().v().length()))
+                .extra("needParse", result.needParse() ? "1" : "0")
+                .extra("verdict", result.getUrl().isEmpty() ? "empty" : result.needParse() ? "sniff" : "success"));
         if (result.getUrl().isEmpty()) onParseError();
         else if (result.needParse()) startWeb(result.getHeader(), UrlUtil.convert(result.getUrl().v()));
         else onParseSuccess(result.getHeader(), result.getUrl().v(), result.getJxFrom());
@@ -199,6 +236,14 @@ public class ParseJob implements ParseCallback {
     @Override
     public void onParseSuccess(Map<String, String> headers, String url, String from) {
         if (!done.compareAndSet(false, true)) return;
+        DebugTrace.set(trace);
+        SpiderDebug.setSpider(site);
+        DebugLogStore.addEvent(DebugEvent.result(true, 0, elapsed())
+                .extra("from", from)
+                .extra("url", cut(url, 600))
+                .extra("referer", hasHeader(headers, "Referer") ? "1" : "0")
+                .extra("ua", hasHeader(headers, "User-Agent") ? "1" : "0")
+                .extra("cookie", hasHeader(headers, "Cookie") ? "1" : "0"));
         App.post(() -> {
             if (callback != null) callback.onParseSuccess(headers, url, from);
             stop();
@@ -208,10 +253,40 @@ public class ParseJob implements ParseCallback {
     @Override
     public void onParseError() {
         if (!done.compareAndSet(false, true)) return;
+        DebugTrace.set(trace);
+        SpiderDebug.setSpider(site);
+        DebugLogStore.addEvent(DebugEvent.result(false, 0, elapsed()).reason(timedOut ? DebugEvent.REASON_PARSE_TIMEOUT : DebugEvent.REASON_PARSE_ERROR));
         App.post(() -> {
             if (callback != null) callback.onParseError();
             stop();
         });
+    }
+
+    private long elapsed() {
+        return startAt == 0 ? 0 : System.currentTimeMillis() - startAt;
+    }
+
+    private static boolean hasHeader(Map<String, String> header, String key) {
+        if (header == null) return false;
+        for (Map.Entry<String, String> entry : header.entrySet()) if (key.equalsIgnoreCase(entry.getKey())) return !TextUtils.isEmpty(entry.getValue());
+        return false;
+    }
+
+    private static String cut(String text, int max) {
+        if (text == null) return "";
+        return text.length() <= max ? text : text.substring(0, max) + "…";
+    }
+
+    private static String stack(Throwable e) {
+        if (e == null) return null;
+        try {
+            java.io.StringWriter writer = new java.io.StringWriter();
+            e.printStackTrace(new java.io.PrintWriter(writer));
+            String text = writer.toString();
+            return text.length() > 2000 ? text.substring(0, 2000) : text;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private void stopWeb() {

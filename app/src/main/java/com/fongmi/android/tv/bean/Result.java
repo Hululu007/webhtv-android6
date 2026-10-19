@@ -97,6 +97,22 @@ public class Result implements Parcelable {
     @SerializedName("drm")
     private Drm drm;
 
+    /**
+     * Debug-only correlation id. Carries the trace started by {@code SiteApi.playerContent}
+     * across to {@code ParseJob}, which runs on another thread later on. Never serialised
+     * (gson skips transient) and never parcelled.
+     */
+    private transient String debugTrace;
+
+    public String getDebugTrace() {
+        return debugTrace;
+    }
+
+    public Result setDebugTrace(String debugTrace) {
+        this.debugTrace = debugTrace;
+        return this;
+    }
+
     public Result() {
     }
 

@@ -22,7 +22,7 @@ public class DebugLogs implements Process {
 
     @Override
     public boolean isRequest(IHTTPSession session, String url) {
-        return url.startsWith("/debug/logs") || url.startsWith("/debug/mpd") || url.startsWith("/debug/stream") || url.startsWith("/debug/clear") || url.startsWith("/debug/enable") || url.startsWith("/debug/disable")
+        return url.startsWith("/debug/logs") || url.startsWith("/debug/mpd") || url.startsWith("/debug/stream") || url.startsWith("/debug/clear") || url.startsWith("/debug/enable") || url.startsWith("/debug/disable") || url.startsWith("/debug/trace")
                 || url.startsWith("/spider/log") || url.startsWith("/spider/stream");
     }
 
@@ -41,12 +41,24 @@ public class DebugLogs implements Process {
             return noCache(NanoHTTPD.newFixedLengthResponse(Response.Status.REDIRECT, NanoHTTPD.MIME_HTML, ""), "/debug/logs");
         }
         if (url.startsWith("/debug/stream")) return stream(session);
+        if (url.startsWith("/debug/trace.json")) return traceJson(session);
+        if (url.startsWith("/debug/trace")) return tracePage();
         if (url.startsWith("/debug/mpd")) return mpd();
         if (url.startsWith("/debug/logs.txt")) return download();
         if (url.startsWith("/spider/stream")) return spiderStream(session);
         if (url.startsWith("/spider/log.txt")) return spiderDownload(session);
         if (url.startsWith("/spider/log")) return spiderPage(session);
         return page();
+    }
+
+    private Response traceJson(IHTTPSession session) {
+        Response response = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", DebugTracePage.json(paramLong(session, "v", -1)));
+        return noCache(response, null);
+    }
+
+    private Response tracePage() {
+        Response response = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", DebugTracePage.html());
+        return noCache(response, null);
     }
 
     private Response mpd() {
@@ -142,7 +154,7 @@ public class DebugLogs implements Process {
                 + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
                 + "<title>调试日志</title>"
                 + "<style>" + css() + "</style></head><body>"
-                + "<main><section class=\"topbar\"><h1>调试日志</h1><a href=\"/debug/logs\">刷新</a><a id=\"download\" href=\"/debug/logs.txt\" download=\"webhtv-debug-log.txt\">下载</a><a href=\"/debug/clear\">清空</a><a href=\"" + (enabled ? "/debug/disable" : "/debug/enable") + "\">" + (enabled ? "关闭" : "开启") + "</a><span id=\"meta\" class=\"meta\" data-version=\"" + DebugLogStore.version() + "\">" + (enabled ? "开启" : "关闭") + " · " + DebugLogStore.size() + " 行 · " + DebugLogStore.bytes() / 1024 + " KB</span></section>"
+                + "<main><section class=\"topbar\"><h1>调试日志</h1><a href=\"/debug/trace\">卡片视图</a><a href=\"/debug/logs\">刷新</a><a id=\"download\" href=\"/debug/logs.txt\" download=\"webhtv-debug-log.txt\">下载</a><a href=\"/debug/clear\">清空</a><a href=\"" + (enabled ? "/debug/disable" : "/debug/enable") + "\">" + (enabled ? "关闭" : "开启") + "</a><span id=\"meta\" class=\"meta\" data-version=\"" + DebugLogStore.version() + "\">" + (enabled ? "开启" : "关闭") + " · " + DebugLogStore.size() + " 行 · " + DebugLogStore.bytes() / 1024 + " KB</span></section>"
                 + "<details class=\"info\"><summary>地址和说明</summary><p class=\"hint\">本页显示 App 当前进程内调试日志。开启后记录安卓系统版本、设备型号、WebView 版本、WebHome、SDK、HTTP 服务、爬虫请求和播放链路；关闭会自动清空。</p>"
                 + "<div class=\"addr\"><a href=\"" + escape(localUrl) + "\">本机地址：" + escape(localUrl) + "</a><a href=\"" + escape(lanUrl) + "\">局域网地址：" + escape(lanUrl) + "</a></div></details>"
                 + "<section class=\"tools\"><div class=\"chips\"><button class=\"chip on\" data-mode=\"all\">全部</button><button class=\"chip\" data-mode=\"proxy\">代理</button><button class=\"chip\" data-mode=\"player\">播放</button><button class=\"chip\" data-mode=\"webhome\">WebHome</button><button class=\"chip\" data-mode=\"console\">Console</button><button class=\"chip\" data-mode=\"webview\">WebView</button><button class=\"chip\" data-mode=\"api\">站源</button><button class=\"chip\" data-mode=\"pan\">网盘</button><button class=\"chip\" data-mode=\"server\">服务</button><button class=\"chip\" data-mode=\"sync\">同步</button><button class=\"chip\" data-mode=\"startup\">启动</button><button class=\"chip\" data-mode=\"error\">错误</button></div>"

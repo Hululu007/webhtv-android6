@@ -17,6 +17,9 @@ import com.fongmi.android.tv.setting.PlayerSetting;
 import com.fongmi.android.tv.utils.ResUtil;
 import com.fongmi.android.tv.utils.Sniffer;
 import com.fongmi.android.tv.web.WebHomeInlineVodStore;
+import com.github.catvod.crawler.DebugEvent;
+import com.github.catvod.crawler.DebugLogStore;
+import com.github.catvod.crawler.DebugTrace;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
@@ -24,6 +27,7 @@ import com.github.catvod.utils.Prefers;
 import com.github.catvod.utils.Util;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -37,6 +41,75 @@ import okhttp3.Response;
 public class SiteApi {
 
     public static final String PUSH = "push_agent";
+
+    private interface Action<T> {
+        T run() throws Exception;
+    }
+
+    /**
+     * Wraps one spider call so that the log viewer can show it as a single card:
+     * an opening {@code call} event, a closing {@code result} event with the elapsed time
+     * and item count, and a shared trace id for everything in between.
+     */
+    private static <T> T traced(String siteKey, String method, String args, Action<T> action) throws Exception {
+        String previous = DebugTrace.current();
+        DebugTrace.begin();
+        long start = System.currentTimeMillis();
+        DebugLogStore.addEvent(DebugEvent.call(method, args).site(siteKey));
+        try {
+            T value = action.run();
+            if (value instanceof Result result) result.setDebugTrace(DebugTrace.current());
+            DebugLogStore.addEvent(DebugEvent.result(true, countOf(value), System.currentTimeMillis() - start).site(siteKey));
+            return value;
+        } catch (Exception e) {
+            DebugLogStore.addEvent(DebugEvent.result(false, 0, System.currentTimeMillis() - start).site(siteKey).reason(reasonOf(e)).extra("error", e.getClass().getSimpleName()));
+            throw e;
+        } finally {
+            DebugTrace.set(previous);
+        }
+    }
+
+    private static int countOf(Object value) {
+        if (!(value instanceof Result result)) return 0;
+        return result.getList().size();
+    }
+
+    private static String reasonOf(Exception e) {
+        if (e instanceof SocketTimeoutException) return DebugEvent.REASON_HTTP_TIMEOUT;
+        String message = e.getMessage();
+        if (message != null && message.contains("MissingMethod")) return DebugEvent.REASON_METHOD_MISSING;
+        return null;
+    }
+
+    /**
+     * Records what the player is actually about to receive. {@code parse} decides whether
+     * the URL goes straight to the player or through a sniffer, and the header flags are
+     * the first thing to check when playback comes back 403.
+     */
+    private static void logResolve(Result result) {
+        String url = result.getUrl() == null ? "" : result.getUrl().v();
+        Map<String, String> header = result.getHeader();
+        DebugLogStore.addEvent(DebugEvent.stage("resolve")
+                .extra("parse", String.valueOf(result.getParse()))
+                .extra("url", cut(url, 600))
+                .extra("referer", hasHeader(header, "Referer") ? "1" : "0")
+                .extra("ua", hasHeader(header, "User-Agent") ? "1" : "0")
+                .extra("cookie", hasHeader(header, "Cookie") ? "1" : "0"));
+        if (TextUtils.isEmpty(url)) {
+            DebugLogStore.addEvent(DebugEvent.exception("EmptyUrl", "播放地址为空", null).reason(DebugEvent.REASON_EMPTY_URL).method("play"));
+        }
+    }
+
+    private static boolean hasHeader(Map<String, String> header, String key) {
+        if (header == null) return false;
+        for (Map.Entry<String, String> entry : header.entrySet()) if (key.equalsIgnoreCase(entry.getKey())) return !TextUtils.isEmpty(entry.getValue());
+        return false;
+    }
+
+    private static String cut(String text, int max) {
+        if (text == null) return "";
+        return text.length() <= max ? text : text.substring(0, max) + "…";
+    }
 
     public static String call(@NonNull Site site, @NonNull ArrayMap<String, String> params) throws IOException {
         if (!site.getExt().isEmpty()) params.put("extend", site.getExt());
@@ -56,6 +129,11 @@ public class SiteApi {
 
     @NonNull
     public static Result homeContent(@NonNull Site site) throws Exception {
+        return traced(site.getKey(), "home", "filter=true", () -> homeContentInternal(site));
+    }
+
+    @NonNull
+    private static Result homeContentInternal(@NonNull Site site) throws Exception {
         if (isSpider(site)) {
             Spider spider = site.recent().spider();
             boolean crash = Prefers.getBoolean("crash");
@@ -101,7 +179,11 @@ public class SiteApi {
 
     @NonNull
     public static Result categoryContent(@NonNull String key, @NonNull String tid, @NonNull String page, boolean filter, @NonNull HashMap<String, String> extend) throws Exception {
-        SpiderDebug.log("category", "key=%s,tid=%s,page=%s,filter=%s,extend=%s", key, tid, page, filter, extend);
+        return traced(key, "category", "tid=" + tid + " page=" + page + " filter=" + filter, () -> categoryContentInternal(key, tid, page, filter, extend));
+    }
+
+    @NonNull
+    private static Result categoryContentInternal(@NonNull String key, @NonNull String tid, @NonNull String page, boolean filter, @NonNull HashMap<String, String> extend) throws Exception {
         Site site = VodConfig.get().getSite(key);
         if (isSpider(site)) {
             SpiderDebug.setSpider(site.getKey());
@@ -130,7 +212,11 @@ public class SiteApi {
 
     @NonNull
     public static Result detailContent(@NonNull String key, @NonNull String id) throws Exception {
-        SpiderDebug.log("detail", "key=%s,id=%s", key, id);
+        return traced(key, "detail", "id=" + id, () -> detailContentInternal(key, id));
+    }
+
+    @NonNull
+    private static Result detailContentInternal(@NonNull String key, @NonNull String id) throws Exception {
         if (WebHomeInlineVodStore.KEY.equals(key)) return WebHomeInlineVodStore.detail(id);
         Site site = VodConfig.get().getSite(key);
         if (site.isEmpty() && PUSH.equals(key)) {
@@ -176,7 +262,11 @@ public class SiteApi {
 
     @NonNull
     public static Result playerContent(@NonNull String key, @NonNull String flag, @NonNull String id, int playerType) throws Exception {
-        SpiderDebug.log("player", "key=%s,flag=%s,id=%s", key, flag, id);
+        return traced(key, "player", "flag=" + flag + " id=" + id, () -> playerContentInternal(key, flag, id, playerType));
+    }
+
+    @NonNull
+    private static Result playerContentInternal(@NonNull String key, @NonNull String flag, @NonNull String id, int playerType) throws Exception {
         Source.get().stop();
         if (WebHomeInlineVodStore.KEY.equals(key)) return WebHomeInlineVodStore.player(flag, id);
         Site site = VodConfig.get().getSite(key);
@@ -197,6 +287,7 @@ public class SiteApi {
             result.setUrl(Source.get().fetch(result, playerType));
             result.setHeader(site.getHeader());
             result.setKey(key);
+            logResolve(result);
             return result;
         } else if (site.getType() == 4) {
             ArrayMap<String, String> params = new ArrayMap<>();
@@ -208,6 +299,7 @@ public class SiteApi {
             if (result.getFlag().isEmpty()) result.setFlag(flag);
             result.setUrl(Source.get().fetch(result, playerType));
             result.setHeader(site.getHeader());
+            logResolve(result);
             return result;
         } else if (site.isEmpty() && "push_agent".equals(key)) {
             Result result = new Result();
@@ -215,6 +307,7 @@ public class SiteApi {
             result.setParse(0);
             result.setFlag(flag);
             result.setUrl(Source.get().fetch(result, playerType));
+            logResolve(result);
             SpiderDebug.log("player", result.toString());
             return result;
         } else {
@@ -225,6 +318,7 @@ public class SiteApi {
             result.setPlayUrl(site.getPlayUrl());
             result.setParse(Sniffer.isVideoFormat(id) && result.getPlayUrl().isEmpty() ? 0 : 1);
             result.setUrl(Source.get().fetch(result, playerType));
+            logResolve(result);
             SpiderDebug.log("player", result.toString());
             return result;
         }
@@ -232,7 +326,11 @@ public class SiteApi {
 
     @NonNull
     public static Result searchContent(@NonNull Site site, @NonNull String keyword, boolean quick, @NonNull String page) throws Exception {
-        SpiderDebug.log("search", "site=%s,keyword=%s,quick=%s,page=%s", site.getName(), keyword, quick, page);
+        return traced(site.getKey(), "search", "key=" + keyword + " quick=" + quick + " page=" + page, () -> searchContentInternal(site, keyword, quick, page));
+    }
+
+    @NonNull
+    private static Result searchContentInternal(@NonNull Site site, @NonNull String keyword, boolean quick, @NonNull String page) throws Exception {
         boolean hasPage = !page.equals("1");
         if (isSpider(site)) {
             SpiderDebug.setSpider(site.getKey());

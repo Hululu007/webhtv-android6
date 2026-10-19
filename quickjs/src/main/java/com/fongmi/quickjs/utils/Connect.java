@@ -1,6 +1,9 @@
 package com.fongmi.quickjs.utils;
 
 import com.fongmi.quickjs.bean.Req;
+import com.github.catvod.crawler.DebugEvent;
+import com.github.catvod.crawler.DebugLogStore;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Util;
@@ -8,11 +11,17 @@ import com.google.common.net.HttpHeaders;
 import com.whl.quickjs.wrapper.JSObject;
 import com.whl.quickjs.wrapper.QuickJSContext;
 
+import androidx.annotation.NonNull;
+
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.security.SecureRandom;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import okhttp3.Call;
+import okhttp3.Callback;
 import okhttp3.FormBody;
 import okhttp3.Headers;
 import okhttp3.MediaType;
@@ -27,6 +36,92 @@ public class Connect {
     public static Call to(String url, Req req) {
         OkHttpClient client = OkHttp.client(req.isRedirect(), req.getTimeout());
         return client.newCall(getRequest(url, req, Headers.of(req.getHeader())));
+    }
+
+    /**
+     * Same as {@code to(url, req).execute()} but records the request in the debug log.
+     * Spider requests used to be completely invisible: {@code OkHttp.client()} carries no
+     * event listener, and {@code Global.req()} swallowed every exception.
+     */
+    public static Response execute(String url, Req req) throws IOException {
+        DebugEvent event = begin(url, req);
+        long start = System.nanoTime();
+        try {
+            Response res = to(url, req).execute();
+            finish(event, res, start);
+            return res;
+        } catch (IOException e) {
+            fail(event, e, start);
+            throw e;
+        }
+    }
+
+    /** Async twin of {@link #execute(String, Req)}. */
+    public static void enqueue(String url, Req req, Callback callback) {
+        DebugEvent event = begin(url, req);
+        long start = System.nanoTime();
+        to(url, req).enqueue(new Callback() {
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response res) throws IOException {
+                finish(event, res, start);
+                callback.onResponse(call, res);
+            }
+
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                fail(event, e, start);
+                callback.onFailure(call, e);
+            }
+        });
+    }
+
+    private static DebugEvent begin(String url, Req req) {
+        if (!SpiderDebug.isEnabled()) return null;
+        DebugEvent event = DebugEvent.http(req.getMethod().toUpperCase(Locale.US), url);
+        event.lang = DebugEvent.LANG_JS;
+        Map<String, String> header = req.getHeader();
+        if (header != null) {
+            String referer = value(header, "Referer");
+            String agent = value(header, "User-Agent");
+            event.extra("referer", referer == null ? "" : cut(referer, 300));
+            event.extra("ua", agent == null ? "" : cut(agent, 160));
+            event.extra("cookie", value(header, "Cookie") == null ? "0" : "1");
+        }
+        return event;
+    }
+
+    private static void finish(DebugEvent event, Response res, long start) {
+        if (event == null) return;
+        event.code(res.code()).ms(elapsed(start));
+        try {
+            long length = res.body() == null ? -1 : res.body().contentLength();
+            if (length >= 0) event.bytes(length);
+        } catch (Throwable ignored) {
+        }
+        if (res.code() >= 400) event.reason(DebugEvent.REASON_HTTP_STATUS);
+        DebugLogStore.addEvent(event);
+    }
+
+    private static void fail(DebugEvent event, IOException e, long start) {
+        if (event == null) return;
+        event.error = e.getClass().getSimpleName();
+        event.msg = e.getMessage();
+        event.ms(elapsed(start));
+        event.reason(e instanceof SocketTimeoutException ? DebugEvent.REASON_HTTP_TIMEOUT : DebugEvent.REASON_HTTP_ERROR);
+        DebugLogStore.addEvent(event);
+    }
+
+    private static long elapsed(long start) {
+        return (System.nanoTime() - start) / 1_000_000L;
+    }
+
+    private static String value(Map<String, String> header, String key) {
+        for (Map.Entry<String, String> entry : header.entrySet()) if (key.equalsIgnoreCase(entry.getKey())) return entry.getValue();
+        return null;
+    }
+
+    private static String cut(String text, int max) {
+        return text.length() <= max ? text : text.substring(0, max) + "…";
     }
 
     public static JSObject success(QuickJSContext ctx, Req req, Response res) {

@@ -9,6 +9,9 @@ import com.fongmi.quickjs.utils.Crypto;
 import com.fongmi.quickjs.utils.JSUtil;
 import com.fongmi.quickjs.utils.Parser;
 import com.github.catvod.Proxy;
+import com.github.catvod.crawler.DebugEvent;
+import com.github.catvod.crawler.DebugLogStore;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.utils.Trans;
 import com.github.catvod.utils.UriUtil;
 import com.orhanobut.logger.Logger;
@@ -71,6 +74,8 @@ public class Global {
                 try {
                     return method.invoke(this, args);
                 } catch (Exception e) {
+                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                    DebugLogStore.addEvent(DebugEvent.exception(cause.getClass().getSimpleName(), cause.getMessage(), stack(cause)).method(method.getName()).reason(DebugEvent.REASON_JS_EXCEPTION));
                     return null;
                 }
             });
@@ -79,6 +84,18 @@ public class Global {
             if (args == null || args.length < 2) return "";
             return pd(String.valueOf(args[0]), String.valueOf(args[1]), args.length > 2 ? String.valueOf(args[2]) : "");
         });
+    }
+
+    static String stack(Throwable e) {
+        if (e == null) return null;
+        try {
+            java.io.StringWriter writer = new java.io.StringWriter();
+            e.printStackTrace(new java.io.PrintWriter(writer));
+            String text = writer.toString();
+            return text.length() > 2000 ? text.substring(0, 2000) : text;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private boolean submit(Runnable runnable) {
@@ -151,9 +168,10 @@ public class Global {
     public JSObject req(String url, JSObject options) {
         try {
             Req req = Req.objectFrom(options.stringify());
-            Response res = Connect.to(url, req).execute();
+            Response res = Connect.execute(url, req);
             return Connect.success(ctx, req, res);
         } catch (Exception e) {
+            DebugLogStore.addEvent(DebugEvent.exception(e.getClass().getSimpleName(), e.getMessage(), stack(e)).reason(DebugEvent.REASON_HTTP_ERROR).method("req"));
             return Connect.error(ctx);
         }
     }
@@ -228,7 +246,7 @@ public class Global {
         complete.hold();
         try {
             Req req = Req.objectFrom(options.stringify());
-            Connect.to(url, req).enqueue(getCallback(complete, req));
+            Connect.enqueue(url, req, getCallback(complete, req));
         } catch (Throwable e) {
             completeError(complete);
         }
