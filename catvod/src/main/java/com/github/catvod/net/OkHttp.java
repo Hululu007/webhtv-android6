@@ -10,6 +10,7 @@ import com.github.catvod.net.interceptor.AuthInterceptor;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.net.interceptor.RequestInterceptor;
 import com.github.catvod.net.interceptor.ResponseInterceptor;
+import com.github.catvod.net.interceptor.TraceInterceptor;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -99,7 +100,10 @@ public class OkHttp {
 
     public static synchronized OkHttpClient client() {
         if (get().client != null) return get().client;
-        return get().client = getBuilder().build();
+        // TraceInterceptor sits last on purpose: it must see the request after
+        // RequestInterceptor/AuthInterceptor have rewritten it, because the user is
+        // debugging what actually went over the wire.
+        return get().client = getBuilder().addInterceptor(new TraceInterceptor()).build();
     }
 
     public static synchronized OkHttpClient player() {

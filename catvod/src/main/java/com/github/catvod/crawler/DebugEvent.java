@@ -67,6 +67,20 @@ public class DebugEvent {
     public Boolean ok;
     public String extra;
 
+    /**
+     * Full request/response forensics. Only populated by {@code TraceInterceptor} on the
+     * catvod HTTP client, i.e. for JAR spiders. JS spiders go through the quickjs
+     * {@code Connect} helper instead. Values are stored verbatim (no redaction) because
+     * the log never leaves the device unless the user explicitly exports it.
+     */
+    public String reqHeaders;
+    public String reqBody;
+    public String reqType;
+    public String resHeaders;
+    public String resBody;
+    public String resType;
+    public Boolean truncated;
+
     public DebugEvent() {
         stamp();
     }
@@ -211,6 +225,13 @@ public class DebugEvent {
         append(builder, "reason", reason);
         append(builder, "items", items);
         append(builder, "ok", ok);
+        append(builder, "reqHeaders", reqHeaders);
+        append(builder, "reqBody", reqBody);
+        append(builder, "reqType", reqType);
+        append(builder, "resHeaders", resHeaders);
+        append(builder, "resBody", resBody);
+        append(builder, "resType", resType);
+        append(builder, "truncated", truncated);
         appendRaw(builder, "extra", extra == null || extra.isEmpty() ? null : "{" + extra + "}");
         builder.append('}');
         return builder.toString();
@@ -247,6 +268,13 @@ public class DebugEvent {
             event.reason = str(body, "reason");
             event.items = intOf(body, "items");
             event.ok = bool(body, "ok");
+            event.reqHeaders = str(body, "reqHeaders");
+            event.reqBody = str(body, "reqBody");
+            event.reqType = str(body, "reqType");
+            event.resHeaders = str(body, "resHeaders");
+            event.resBody = str(body, "resBody");
+            event.resType = str(body, "resType");
+            event.truncated = bool(body, "truncated");
             return event;
         } catch (Throwable e) {
             return null;

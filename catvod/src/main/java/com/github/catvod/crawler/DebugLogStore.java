@@ -41,7 +41,12 @@ public class DebugLogStore {
     private static final String FILE_NAME = "webhtv-debug-log.txt";
     private static final String PREF_ENABLED = "debug_log";
     private static final int MAX_MESSAGE_CHARS = 12000;
-    private static final int MAX_EVENTS = 20000;
+    /**
+     * Kept deliberately small. Each HTTP event can now carry up to 8 KB of request body and
+     * 4 KB of response body, so the old 20000 cap could hold tens of megabytes in a process
+     * whose whole heap is 512 MB on the TV. 4000 events still covers dozens of operations.
+     */
+    private static final int MAX_EVENTS = 4000;
     private static final long MAX_FILE_BYTES = 4L * 1024 * 1024;
     private static final int COMPACT_CHECK_EVERY = 200;
     private static long version;
