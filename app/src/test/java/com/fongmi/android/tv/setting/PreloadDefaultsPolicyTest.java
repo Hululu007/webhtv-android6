@@ -9,10 +9,20 @@ import static org.junit.Assert.assertTrue;
 public class PreloadDefaultsPolicyTest {
 
     @Test
-    public void allFixedProfilesUseConservativePreloadDefaults() {
+    public void mpvAndIjkKeepConservativePreloadDefaults() {
         for (int profile : new int[]{PlaybackPerformanceSetting.PROFILE_AUTO, PlaybackPerformanceSetting.PROFILE_RECOMMENDED, PlaybackPerformanceSetting.PROFILE_COMPATIBLE, PlaybackPerformanceSetting.PROFILE_LIGHTWEIGHT}) {
-            assertEquals(1, KernelPerformanceSetting.preloadThreadsForPreset(profile));
-            assertEquals(20, KernelPerformanceSetting.preloadTimeForPreset(profile));
+            assertEquals(1, KernelPerformanceSetting.preloadThreadsForPreset(PlayerSetting.MPV, profile));
+            assertEquals(20, KernelPerformanceSetting.preloadTimeForPreset(PlayerSetting.MPV, profile));
+            assertEquals(1, KernelPerformanceSetting.preloadThreadsForPreset(PlayerSetting.IJK, profile));
+            assertEquals(20, KernelPerformanceSetting.preloadTimeForPreset(PlayerSetting.IJK, profile));
+        }
+    }
+
+    @Test
+    public void exoUsesTunedPreloadDefaults() {
+        for (int profile : new int[]{PlaybackPerformanceSetting.PROFILE_AUTO, PlaybackPerformanceSetting.PROFILE_RECOMMENDED, PlaybackPerformanceSetting.PROFILE_COMPATIBLE, PlaybackPerformanceSetting.PROFILE_LIGHTWEIGHT}) {
+            assertEquals(2, KernelPerformanceSetting.preloadThreadsForPreset(PlayerSetting.EXO, profile));
+            assertEquals(120, KernelPerformanceSetting.preloadTimeForPreset(PlayerSetting.EXO, profile));
         }
     }
 
