@@ -6,6 +6,15 @@ public final class KernelPerformanceSetting {
 
     private static final String KEY_MIGRATED = "perf_kernel_shared_migrated";
     private static final String KEY_PAUSE_PRELOAD_MIGRATED = "perf_pause_preload_policy_v2_migrated";
+    private static final String KEY_EXO_PRELOAD_DEFAULTS_MIGRATED = "perf_exo_preload_defaults_v2_migrated";
+
+    // EXO-only tuned preload defaults. MPV/IJK keep the legacy defaults on purpose:
+    // their preload paths differ (MPV needs the automatic gate chain, IJK is manual
+    // with a 10s throttle), so the same numbers do not mean the same behaviour.
+    private static final boolean EXO_DEFAULT_PRELOAD = true;
+    private static final int EXO_DEFAULT_PRELOAD_THREADS = 2;
+    private static final int EXO_DEFAULT_PRELOAD_SIZE_MB = 512;
+    private static final int EXO_DEFAULT_PRELOAD_TIME_SECONDS = 120;
 
     private KernelPerformanceSetting() {
     }
@@ -52,7 +61,7 @@ public final class KernelPerformanceSetting {
 
     public static boolean isPreload(int kernel) {
         ensureMigrated();
-        return Prefers.getBoolean(key(kernel, "preload"));
+        return Prefers.getBoolean(key(kernel, "preload"), defaultPreload(kernel));
     }
 
     public static void putPreload(int kernel, boolean value) {
@@ -62,7 +71,7 @@ public final class KernelPerformanceSetting {
 
     public static int getPreloadThreads(int kernel) {
         ensureMigrated();
-        return clamp(Prefers.getInt(key(kernel, "preload_threads"), PreloadSetting.DEFAULT_THREADS), PreloadSetting.MIN_THREADS, PreloadSetting.MAX_THREADS);
+        return clamp(Prefers.getInt(key(kernel, "preload_threads"), defaultPreloadThreads(kernel)), PreloadSetting.MIN_THREADS, PreloadSetting.MAX_THREADS);
     }
 
     public static void putPreloadThreads(int kernel, int value) {
@@ -72,7 +81,7 @@ public final class KernelPerformanceSetting {
 
     public static int getPreloadSizeMb(int kernel) {
         ensureMigrated();
-        return closestPreloadSize(Prefers.getInt(key(kernel, "preload_size"), PreloadSetting.MIN_SIZE_MB));
+        return closestPreloadSize(Prefers.getInt(key(kernel, "preload_size"), defaultPreloadSizeMb(kernel)));
     }
 
     public static void putPreloadSizeMb(int kernel, int value) {
@@ -82,7 +91,7 @@ public final class KernelPerformanceSetting {
 
     public static int getPreloadTimeSeconds(int kernel) {
         ensureMigrated();
-        int seconds = clamp(Prefers.getInt(key(kernel, "preload_time"), PreloadSetting.DEFAULT_TIME_SECONDS), PreloadSetting.MIN_TIME_SECONDS, PreloadSetting.MAX_TIME_SECONDS);
+        int seconds = clamp(Prefers.getInt(key(kernel, "preload_time"), defaultPreloadTimeSeconds(kernel)), PreloadSetting.MIN_TIME_SECONDS, PreloadSetting.MAX_TIME_SECONDS);
         int steps = Math.round((float) (seconds - PreloadSetting.MIN_TIME_SECONDS) / PreloadSetting.STEP_TIME_SECONDS);
         return clamp(PreloadSetting.MIN_TIME_SECONDS + steps * PreloadSetting.STEP_TIME_SECONDS, PreloadSetting.MIN_TIME_SECONDS, PreloadSetting.MAX_TIME_SECONDS);
     }
@@ -166,9 +175,9 @@ public final class KernelPerformanceSetting {
                     ? mpvBackBufferOptionForPreset(profile) : 0);
             putPlayCacheOption(kernel, 0);
             putPreload(kernel, false);
-            putPreloadThreads(kernel, preloadThreadsForPreset(profile));
+            putPreloadThreads(kernel, preloadThreadsForPreset(kernel, profile));
             putPreloadSizeMb(kernel, PreloadSetting.MIN_SIZE_MB);
-            putPreloadTimeSeconds(kernel, preloadTimeForPreset(profile));
+            putPreloadTimeSeconds(kernel, preloadTimeForPreset(kernel, profile));
             putPreloadAheadSeconds(kernel, PreloadSetting.DEFAULT_AHEAD_SECONDS);
             putPausePreloadPolicy(kernel, PreloadSetting.DEFAULT_PAUSE_PRELOAD);
             putAudioPassThrough(kernel, audioPassthroughForPreset(kernel));
@@ -184,9 +193,9 @@ public final class KernelPerformanceSetting {
                     : kernel == PlayerSetting.MPV ? mpvBackBufferOptionForPreset(profile) : 2);
             putPlayCacheOption(kernel, 2);
             putPreload(kernel, true);
-            putPreloadThreads(kernel, preloadThreadsForPreset(profile));
+            putPreloadThreads(kernel, preloadThreadsForPreset(kernel, profile));
             putPreloadSizeMb(kernel, 512);
-            putPreloadTimeSeconds(kernel, preloadTimeForPreset(profile));
+            putPreloadTimeSeconds(kernel, preloadTimeForPreset(kernel, profile));
             putPreloadAheadSeconds(kernel, PreloadSetting.DEFAULT_AHEAD_SECONDS);
             putPausePreloadPolicy(kernel, PreloadSetting.DEFAULT_PAUSE_PRELOAD);
             putAudioPassThrough(kernel, audioPassthroughForPreset(kernel));
@@ -204,18 +213,18 @@ public final class KernelPerformanceSetting {
             putPreload(kernel, false);
             putPreloadSizeMb(kernel, PreloadSetting.MIN_SIZE_MB);
         }
-        putPreloadThreads(kernel, preloadThreadsForPreset(profile));
-        putPreloadTimeSeconds(kernel, preloadTimeForPreset(profile));
+        putPreloadThreads(kernel, preloadThreadsForPreset(kernel, profile));
+        putPreloadTimeSeconds(kernel, preloadTimeForPreset(kernel, profile));
         putPreloadAheadSeconds(kernel, PreloadSetting.DEFAULT_AHEAD_SECONDS);
         putPausePreloadPolicy(kernel, PreloadSetting.DEFAULT_PAUSE_PRELOAD);
     }
 
-    static int preloadThreadsForPreset(int profile) {
-        return PreloadSetting.DEFAULT_THREADS;
+    static int preloadThreadsForPreset(int kernel, int profile) {
+        return isExo(kernel) ? EXO_DEFAULT_PRELOAD_THREADS : PreloadSetting.DEFAULT_THREADS;
     }
 
-    static int preloadTimeForPreset(int profile) {
-        return PreloadSetting.DEFAULT_TIME_SECONDS;
+    static int preloadTimeForPreset(int kernel, int profile) {
+        return isExo(kernel) ? EXO_DEFAULT_PRELOAD_TIME_SECONDS : PreloadSetting.DEFAULT_TIME_SECONDS;
     }
 
     static void applyExoLoadControlPreset(int profile) {
@@ -283,7 +292,11 @@ public final class KernelPerformanceSetting {
     }
 
     private static synchronized void ensureMigrated() {
-        if (Prefers.getBoolean(KEY_MIGRATED)) return;
+        if (!Prefers.getBoolean(KEY_MIGRATED)) migrateLegacySharedKeys();
+        ensureExoPreloadDefaults();
+    }
+
+    private static void migrateLegacySharedKeys() {
         int buffer = clamp(Prefers.getInt("buffer"), 1, 10);
         int bufferBytes = clamp(Prefers.getInt("buffer_bytes"), 0, 3);
         int backBuffer = clamp(Prefers.getInt("back_buffer"), 0, 3);
@@ -311,6 +324,52 @@ public final class KernelPerformanceSetting {
             Prefers.put(key(kernel, "video_prefer"), videoPrefer);
         }
         Prefers.put(KEY_MIGRATED, true);
+    }
+
+    /**
+     * Moves EXO onto the tuned preload defaults exactly once. Only entries that still
+     * hold the legacy default are rewritten, so a value the user picked in the UI is
+     * never clobbered by this migration. MPV and IJK are deliberately untouched.
+     */
+    private static synchronized void ensureExoPreloadDefaults() {
+        if (Prefers.getBoolean(KEY_EXO_PRELOAD_DEFAULTS_MIGRATED)) return;
+        String preloadKey = key(PlayerSetting.EXO, "preload");
+        String threadsKey = key(PlayerSetting.EXO, "preload_threads");
+        String sizeKey = key(PlayerSetting.EXO, "preload_size");
+        String timeKey = key(PlayerSetting.EXO, "preload_time");
+        if (Prefers.getPrefers().contains(preloadKey) && !Prefers.getBoolean(preloadKey)) {
+            Prefers.put(preloadKey, EXO_DEFAULT_PRELOAD);
+        }
+        if (Prefers.getInt(threadsKey, PreloadSetting.DEFAULT_THREADS) == PreloadSetting.DEFAULT_THREADS) {
+            Prefers.put(threadsKey, EXO_DEFAULT_PRELOAD_THREADS);
+        }
+        if (Prefers.getInt(sizeKey, PreloadSetting.MIN_SIZE_MB) == PreloadSetting.MIN_SIZE_MB) {
+            Prefers.put(sizeKey, EXO_DEFAULT_PRELOAD_SIZE_MB);
+        }
+        if (Prefers.getInt(timeKey, PreloadSetting.DEFAULT_TIME_SECONDS) == PreloadSetting.DEFAULT_TIME_SECONDS) {
+            Prefers.put(timeKey, EXO_DEFAULT_PRELOAD_TIME_SECONDS);
+        }
+        Prefers.put(KEY_EXO_PRELOAD_DEFAULTS_MIGRATED, true);
+    }
+
+    private static boolean isExo(int kernel) {
+        return kernel != PlayerSetting.MPV && kernel != PlayerSetting.IJK;
+    }
+
+    private static boolean defaultPreload(int kernel) {
+        return isExo(kernel) && EXO_DEFAULT_PRELOAD;
+    }
+
+    private static int defaultPreloadThreads(int kernel) {
+        return isExo(kernel) ? EXO_DEFAULT_PRELOAD_THREADS : PreloadSetting.DEFAULT_THREADS;
+    }
+
+    private static int defaultPreloadSizeMb(int kernel) {
+        return isExo(kernel) ? EXO_DEFAULT_PRELOAD_SIZE_MB : PreloadSetting.MIN_SIZE_MB;
+    }
+
+    private static int defaultPreloadTimeSeconds(int kernel) {
+        return isExo(kernel) ? EXO_DEFAULT_PRELOAD_TIME_SECONDS : PreloadSetting.DEFAULT_TIME_SECONDS;
     }
 
     private static synchronized void ensurePausePreloadMigrated() {
