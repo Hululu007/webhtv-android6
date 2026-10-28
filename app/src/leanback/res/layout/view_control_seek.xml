@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -27,7 +28,8 @@
         android:nextFocusLeft="@id/timeBar"
         android:nextFocusRight="@id/timeBar"
         android:nextFocusUp="@id/next"
-        android:nextFocusDown="@id/timeBar" />
+        android:nextFocusDown="@id/timeBar"
+        app:buffered_color="#99FFFFFF" />
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/duration"
